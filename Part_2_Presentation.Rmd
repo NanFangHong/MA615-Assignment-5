@@ -1,0 +1,498 @@
+---
+title: "Part 2 Presentation"
+author: "Maria Ren, Jiajian Guo, Nanfang Hong"
+date: "3/14/2018"
+output: ioslides_presentation
+code_folding: hide
+incremental: true
+---
+  
+  <style type="text/css">
+  
+  body{ /* Normal  */
+      font-size: 12px;
+  }
+td {  /* Table  */
+    font-size: 8px;
+}
+h1.title {
+  font-size: 38px;
+  color: DarkRed;
+}
+h1 { /* Header 1 */
+    font-size: 36px;
+  color: Brown;
+}
+h2 { /* Header 2 */
+    font-size: 36px;
+  color: Brown;
+}
+h3 { /* Header 3 */
+    font-size: 36px;
+  font-family: "Times New Roman", Times, serif;
+  color: Browne;
+}
+code.r{ /* Code block */
+    font-size: 12px;
+}
+pre { /* Code block - determines code spacing between lines */
+    font-size: 14px;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Objective 
+
+We apply insecticides, herbicides, pesticides on vegetables and fruits in order to help protect our crops and yield higher quality food. But are they safe? 
+
+This project 
+
+- analyzes USDA survey data with annual insecticide application
+
+- seeks connections between chemical application and level of toxcity
+
+
+## Initial Dataset
+- Used the USDA QuickStats site 
+    Program: Survey
+    Sector: Environmental
+    Group: Vegetables
+    Commodity: Vegetables Totals, Vegetables Other, Broccoli, Brussels Sprouts, Cauliflower
+- Created our basic dataset veg1.xlsx
+- Original data included the following 21 columns 
+"Program", "Year", "Period", "Week Ending", "Geo Level", "State", "State ANSI", "Ag District", "Ag District Code", "County", "County ANSI", "Zip Code", "Region", "watershed_code", "Watershed", "Commodity", "Data Item", "Domain", "Domain Category", "Value", "CV (%)"          
+
+```{r, include=FALSE}
+library(tidyverse)
+library(readxl)
+library(DT)
+veg1 <- read_csv('veg1.csv') %>% select(-X1)
+```
+
+## Intial Cleaning 
+- Only 9 columns has more than one distinct values: 
+"Year", "Geo Level", "State ANSI", "Region", "Commodity", "Data Item", "Domain", "Domain Category", "Value"
+
+```{r, echo= FALSE}
+unique_col<- apply(veg1, 2, n_distinct)
+unique_name <- names(unique_col[unique_col>1])
+unique_name
+```
+
+## Create separate data set for restricted chemical
+- create new data set with columns with more than one individual values
+- separate the "category" column into two columns
+- single out all rows where the column is named "restricted use chemical"
+- 28 total distinct rows for lable and quant where label is "restricted use chemical"
+```{r, include=FALSE}
+restrict_chemical <- veg1 %>% 
+  select(unique_name) %>% 
+  rename(Geo = `Geo Level`, 
+         State = `State ANSI`,
+         Data = `Data Item`,
+         Category = `Domain Category`) %>% 
+  separate(Category, into = c("label", "quant"), sep=",") %>% 
+  filter(label=="RESTRICTED USE CHEMICAL") %>% 
+  separate(quant, into = c("Chemical", "PesticideCode"), sep = "=") %>% 
+  select(Chemical, PesticideCode) %>% unique()
+```
+## Restrict_chemical data
+```{r,echo=FALSE}
+datatable(restrict_chemical, extensions = 'AutoFill', options = list(autoFill = TRUE))
+```
+
+## Matching CAS Number 
+- Used dataset from Cornell Extension Toxicology Network
+http://pmep.cce.cornell.edu/profiles/extoxnet/carbaryl-dicrotophos/cyfluthrin-ext.html
+- Matched CAS number to corresponding restricted chemicals 
+
+```{r,include=FALSE}
+for(i in 1:nrow(restrict_chemical)) {
+  restrict_chemical[i, ]$PesticideCode <- str_sub(restrict_chemical[i, ]$PesticideCode, 2, -2)
+  restrict_chemical[i, ]$Chemical <- str_c(restrict_chemical[i, ]$Chemical, ")", sep = "") 
+  
+}
+codetable <- read.csv("PesticideCodeCASNumber.csv") %>% as.tibble()
+restrict_chemical <- left_join(restrict_chemical, codetable, by = c('PesticideCode' = 'Pesticide.code')) %>% select(Chemical, PesticideCode, CAS.No.)
+restrict_chemical$CAS.No. <- restrict_chemical$CAS.No. %>% as.character()
+
+for(i in 1:nrow(restrict_chemical)) {
+  while (str_detect(restrict_chemical[i, ]$CAS.No., '^0') == TRUE) {
+    restrict_chemical[i, ]$CAS.No. <- str_sub(restrict_chemical[i, ]$CAS.No., 2, -1)
+  }
+  while (str_detect(restrict_chemical[i, ]$CAS.No., '\\s$') == TRUE) {
+    restrict_chemical[i, ]$CAS.No. <- str_sub(restrict_chemical[i, ]$CAS.No., 1, -2)
+  }
+}
+```
+
+## Restrict_chemical dataset with CAS number added 
+```{r,echo=FALSE}
+datatable(restrict_chemical, extensions = 'AutoFill', options = list(autoFill = TRUE))
+```
+
+
+
+## CAS numbers 
+- several chemicals in the list have more than one cas number listed, we are trying to find and predict which one would fit the context) 
+
+- Zeta Cypermethrin has three different CAS number listed:
+- 52315-07-8 (our choice)
+- 69865-47-0 
+- 86752-99-0 
+- since the bottom two numbers are older CAS numbers, we decided to go with the most updated one(the top one) 
+- LGT (National Measurement Institute for chemical and bioanalytical measurements) also listed Zeta Cypermethrin under the category "industry sector" specified as "food and environment", therefore, it seems to fit our context. 
+
+## CAS numbers (continued...)
+- Fenpropathrin
+- 39515-41-8 (our choice)
+- 64257-84-7 
+- Fenpropathrin has two different CAS number listed. Searching by the two different CAS number yields the same chemical yet different chemical structure and properties. We decided to go with the first one since the CAS number is listed under the WHO Acute Hazard List for hazardous chemical used for agricultural purposes, which fits our context.
+
+
+##  Adding LD50 Column 
+- Using the LD50 lethality effect level data from the EPA website
+https://comptox.epa.gov/dashboard/hazard/download_tab?dtxid=DTXSID4020458&filetype=tsv&tab=Lethality+Effect+Level
+- The EPA lethality table requires transcoding between CAS and DTXSID in order to match our original content
+- Used "DSSTOX"" column of transcoding document found from EPA chemistry dashboard site for transcoding
+https://comptox.epa.gov/dashboard/downloads 
+```{r,include=FALSE}
+# to match the DSSTOX Cas-DTXSID transcoder, we need to delete left '0' in restricted_chemical
+codetable2 <- read_xlsx("Dsstox_CAS_number_name.xlsx")
+restrict_chemical <- left_join(restrict_chemical, codetable2, by = c('CAS.No.' = 'casrn')) %>% select(Chemical, PesticideCode, CAS.No., dsstox_substance_id)
+# We notice that the table does not have cas for beta-Cyfluthrin, so we add 'DTXSID8032330' 
+restrict_chemical[3, ]$dsstox_substance_id <- 'DTXSID8032330'
+restrict_chemical <- restrict_chemical %>% add_column(address = NA, LD50 = NA)
+for(i in 1:nrow(restrict_chemical)) {
+  
+  restrict_chemical[i, ]$address <- paste('https://comptox.epa.gov/dashboard/hazard/download_tab?dtxid=', 
+                   restrict_chemical[i, ]$dsstox_substance_id, 
+                   '&filetype=tsv&tab=Lethality+Effect+Level', sep = '')
+}
+```
+
+## More data cleaning for adding LD50 (Special cases)
+- Some toxicity data unavailable, like beta-Cyfluthrin. 
+- Some chemical has multiple LD50, by same searching parameters. we get the minimun among mean, median and geometric mean. 
+- beta-Cyfluthrin LD50 is 869 (1271 mg/kg in rats)
+- No lethality for EMAMECTIN BENZOATE. 
+- Syngenta data, EMAMECTIN BENZOATE is 2950 mg/kg for rat (oral route)
+- (source) http://www.syngentacropprotection.com
+- Best guess for gamma-Cyhalothrin is 55 mg/kg, though the unit slightly changed to 'mg/kg-day'
+
+
+```{r,include=FALSE}
+for(i in 1:nrow(restrict_chemical)) {
+  if (restrict_chemical[i, ]$dsstox_substance_id == 'DTXSID8032330') next
+  tsv1 <- read_tsv(restrict_chemical[i, ]$address) %>% 
+    filter(SPECIES == "rat", TYPE == "LD50", STUDY_TYPE == "oral", UNITS == 'mg/kg')
+  restrict_chemical[i, ]$LD50 <-  min(exp(summarise(tsv1, avg = mean(log(VALUES)))), 
+                                      summarise(tsv1, avg = mean(VALUES)), 
+                                      summarise(tsv1, avg = median(VALUES)))
+}
+
+restrict_chemical[3, ]$LD50 <- '869'
+restrict_chemical[8, ]$LD50 <- '2950'
+restrict_chemical[26, ]$LD50 <- '55'
+
+```
+
+## Restricted_chemical table with LD50 added
+```{r,echo=FALSE}
+restrict <- select(restrict_chemical,Chemical,PesticideCode,CAS.No.,dsstox_substance_id,LD50)
+datatable(restrict, extensions = 'AutoFill', options = list(autoFill = TRUE))
+```
+
+## Connections and Comparisons within table
+
+- pull out "data item" and "Value" column from original veg1.xlsx file
+- extract application method information from "data item" and create "Methodology" column
+- clear up restrict_veg dataset (include variables "Year", "Chemical", "Vegetable","Methodology" "Value", "LD50")
+
+## Details with different columns of the table 
+-"Methodology" (unit of application method):
+
+- A. total application (lb)	
+- B. average applications per acre per application (lb)
+- C. average applications per acre per year 	
+- D. overal average amount application (lb)	
+- E. average percentage of area treated (measured in pct of area planted)
+
+-"Value" (application amount- measured in lb) 
+
+
+```{r,include=FALSE}
+restrict_veg <- veg1 %>% 
+  select(unique_name) %>% 
+  rename(Geo = `Geo Level`, 
+         State = `State ANSI`,
+         Data = `Data Item`,
+         Category = `Domain Category`) %>% 
+  separate(Category, into = c("label", "quant"), sep=",") %>% 
+  filter(label=="RESTRICTED USE CHEMICAL") %>% 
+  separate(quant, into = c("Chemical", "PesticideCode"), sep = "=") %>% 
+  select(Year, PesticideCode, Geo, State, Value, Data) 
+
+for(i in 1:nrow(restrict_veg)) {
+  restrict_veg[i, ]$PesticideCode <- str_sub(restrict_veg[i, ]$PesticideCode, 2, -2)
+}
+
+restrict_veg <- left_join(restrict_chemical, restrict_veg, by = c('PesticideCode' = 'PesticideCode')) %>%
+  select(Year, Chemical, PesticideCode, CAS.No., dsstox_substance_id, Geo, State, Data, Value, LD50) %>% 
+  separate(Data, into = c("Vegetable", "Methodology"), sep = "-")
+
+restrict_veg$Geo %>% unique()
+#[1] "REGION : MULTI-STATE"
+
+
+analysis_veg <- restrict_veg %>% select(-PesticideCode, -CAS.No., -dsstox_substance_id, -Geo, -State) %>% filter(Value != '(D)' & Value != '(Z)')
+
+restrict_chemical %>% arrange(as.numeric(LD50)) %>% select(Chemical, LD50)
+analysis_veg$Vegetable %>% unique()
+
+```
+## Analysis_veg table (cleaned for comparisons and analysis)
+```{r,echo=FALSE}
+# Different Veg has different production. We can compare different chemical within same veg category.
+datatable(analysis_veg, extensions = 'AutoFill', options = list(autoFill = TRUE))
+```
+
+
+## Relationship between the 5 methods of application in "Methodology Column"
+- C = D * B
+- A / (C * E * 0.01) = total amount of chemical application per year to planted acres
+- The above equation represent the relationship between 5 application methods ABCDE
+- Using the above, we mutated column A so that it represent the total amount of chemical application per year to planted acres
+- we can now use this result to compare different chemical treatment across the same vegetable within the same year
+
+```{r,include=FALSE}
+analysis_veg <- analysis_veg %>% spread(Methodology, Value)
+analysis_veg <- analysis_veg %>% 
+  mutate(A = as.numeric(` APPLICATIONS, MEASURED IN LB`),
+         B = as.numeric(` APPLICATIONS, MEASURED IN LB / ACRE / APPLICATION, AVG`),
+         C = as.numeric(` APPLICATIONS, MEASURED IN LB / ACRE / YEAR, AVG`),
+         D = as.numeric(` APPLICATIONS, MEASURED IN NUMBER, AVG`),
+         E = as.numeric(` TREATED, MEASURED IN PCT OF AREA PLANTED, AVG`)
+           )
+analysis_veg$LD50 <- as.numeric(analysis_veg$LD50)
+analysis_veg <- analysis_veg %>% select(Chemical, Vegetable, Year, LD50, A, B, C, D, E)
+
+broccoli <- analysis_veg %>% mutate(acre = A / (C * E * 0.01)) %>% filter(Vegetable == "BROCCOLI ") %>% arrange(Chemical) %>% arrange(Year)
+cauliflower <- analysis_veg %>% mutate(acre = A / (C * E * 0.01)) %>% filter(Vegetable == "CAULIFLOWER ") %>% arrange(Chemical) %>% arrange(Year)
+```
+
+## Analysis_veg table (including columns LD50 and column A, total application per planted area)
+```{r,echo=FALSE}
+analysis <- analysis_veg %>% select(Chemical, Vegetable, Year, LD50, A) 
+datatable(analysis, extensions = 'AutoFill', options = list(autoFill = TRUE))
+```
+
+## Comparison plot (broccoli)
+```{r,include=FALSE}
+library(cowplot)
+
+plot.bro.2006 <- broccoli %>% filter(Year == 2006) %>% ggplot(aes(log10(LD50), log(A))) + geom_point()
+plot.bro.2010 <- broccoli %>% filter(Year == 2010) %>% ggplot(aes(log10(LD50), log(A))) + geom_point()
+plot.bro.2014 <- broccoli %>% filter(Year == 2014) %>% ggplot(aes(log10(LD50), log(A))) + geom_point()
+plot.bro.2016 <- broccoli %>% filter(Year == 2016) %>% ggplot(aes(log10(LD50), log(A))) + geom_point()
+
+shiny.bro <- plot_grid(plot.bro.2006, plot.bro.2010, plot.bro.2014, plot.bro.2016, 
+          labels = c('2006', '2010', '2014', '2016'))
+```
+
+```{r,echo=FALSE}
+shiny.bro
+#Making shinys
+```
+
+
+
+## Comparison plot (cauliflower)
+```{r,include=FALSE}
+
+plot.cau.2006 <- cauliflower %>% filter(Year == 2006) %>% ggplot(aes(log10(LD50), log(A))) + geom_point()
+plot.cau.2010 <- cauliflower %>% filter(Year == 2010) %>% ggplot(aes(log10(LD50), log(A))) + geom_point()
+plot.cau.2014 <- cauliflower %>% filter(Year == 2014) %>% ggplot(aes(log10(LD50), log(A))) + geom_point()
+plot.cau.2016 <- cauliflower %>% filter(Year == 2016) %>% ggplot(aes(log10(LD50), log(A))) + geom_point()
+
+shiny.cau <- plot_grid(plot.cau.2006, plot.cau.2010, plot.cau.2014, plot.cau.2016, 
+          labels = c('2006', '2010', '2014', '2016'))
+```
+
+```{r,echo=FALSE}
+shiny.cau
+#Making shinys
+```
+
+
+## Conclusion
+
+
+- After tidying the data, we found out that the vegetables with restricted chemicals are broccoli and cauliflower. Brussles sprouts are not in the data set, so we conclude that brussels sprouts is safer for human consumption.
+
+```{r}
+unique(restrict_veg["Vegetable"])
+```
+
+## Conclusion
+- There are four categories of LD50 levels
+  - 0-50 highly toxic
+  - 50-500 moderately toxic
+  - 500-5000 slightly toxic 
+  - >5000 relatively non-toxic 
+  
+```{r,include=FALSE}
+library(reshape2)
+a <- c(restrict_chemical["LD50"])
+a <- as.numeric(as.character(unlist(a)))
+a1<-melt(table(cut(a,breaks=c(0,50,500,5000,10000))))
+a2<-data.frame(sapply(a1,function(x) gsub("\\(|\\]","",gsub("\\,","-",x)))) 
+colnames(a2)<-c("numbers","Freq") 
+```
+
+```{r,echo=FALSE}
+a2
+```
+
+
+## Conclusion
+- The majority of the restricted chemicals are within the category of moderately toxic and there are four highly toxic chemical elements among the list of restricted chemicals. 
+- Methomyl(LD50=28.22732), Oxydemeton-Methyl(LD50=48), Disulfoton(LD50=2.6) and Methamidophos(LD50=16). 
+
+```{r,echo=FALSE}
+restrict_chemical$Chemical[which(restrict_chemical$LD50==28.2273162203179)]
+restrict_chemical$Chemical[which(restrict_chemical$LD50==48)]
+restrict_chemical$Chemical[which(restrict_chemical$LD50==2.6)]
+restrict_chemical$Chemical[which(restrict_chemical$LD50==16)]
+
+```
+
+## Conclusion
+
+- Taking a closer look at the four highly toxic chemical elements and each vegetable
+- Filter the broccoli and cauliflower data to only include the four extreme toxic chemicals
+
+
+## Data for Broccoli with 4 highly toxic chemical (2006)
+```{r,echo=FALSE}
+b2006.1 <- broccoli %>% filter(Year == 2006) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (METHOMYL )")
+b2006.2 <- broccoli %>% filter(Year == 2006) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (OXYDEMETON-METHYL )")
+b2006.3 <- broccoli %>% filter(Year == 2006) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (DISULFOTON )")
+b2006.4 <- broccoli %>% filter(Year == 2006) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (METHAMIDOPHOS )")
+rbind(b2006.1,b2006.2,b2006.3,b2006.4)
+```
+## Data for Broccoli with 4 highly toxic chemical (2010)
+```{r,echo=FALSE}
+b2010.1 <- broccoli %>% filter(Year == 2010) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (METHOMYL )")
+b2010.2 <- broccoli %>% filter(Year == 2010) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (OXYDEMETON-METHYL )")
+b2010.3 <- broccoli %>% filter(Year == 2010) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (DISULFOTON )")
+b2010.4 <- broccoli %>% filter(Year == 2010) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (METHAMIDOPHOS )")
+rbind(b2010.1,b2010.2,b2010.3,b2010.4)
+```
+## Data for Broccoli with 4 highly toxic chemical (2014)
+```{r,echo=FALSE}
+b2014.1 <- broccoli %>% filter(Year == 2014) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (METHOMYL )")
+b2014.2 <- broccoli %>% filter(Year == 2014) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (OXYDEMETON-METHYL )")
+b2014.3 <- broccoli %>% filter(Year == 2014) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (DISULFOTON )")
+b2014.4 <- broccoli %>% filter(Year == 2014) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (METHAMIDOPHOS )")
+rbind(b2014.1,b2014.2,b2014.3,b2014.4)
+```
+## Data for Broccoli with 4 highly toxic chemical (2016)
+```{r,echo=FALSE}
+b2016.1 <- broccoli %>% filter(Year == 2016) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (METHOMYL )")
+b2016.2 <- broccoli %>% filter(Year == 2016) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (OXYDEMETON-METHYL )")
+b2016.3 <- broccoli %>% filter(Year == 2016) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (DISULFOTON )")
+b2016.4 <- broccoli %>% filter(Year == 2016) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (METHAMIDOPHOS )")
+rbind(b2016.1,b2016.2,b2016.3,b2016.4)
+```
+
+## Observation  
+- Out of the four types of extreme toxic chemicals, Methomyl and Disulfoton were applied to broccoli across 2006-2016 (With Disulfoton being the most toxic element on our restricted chemical list lD50 = 2.6)
+- The amount of application is very high (e.g. 10200lb Disulfoton applied in 2006, and 10200lb methomyl applied in 2010)
+- Yet the amount of application decreased across the 10 year period (Methomyl decreased from 10200lb to 1100lb from 2010 to 2016)
+- The types of chemicals used also changed from high toxicity to lower toxicity (stopped using Disulfoton after 2006, and primarily used Methomyl which has a lower toxicity than Disulfoton)
+
+
+## Data for Cauliflower with 4 highly toxic chemical (2006)
+```{r,echo=FALSE}
+c2006.1 <- cauliflower %>% filter(Year == 2006) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (METHOMYL )")
+c2006.2 <- cauliflower %>% filter(Year == 2006) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (OXYDEMETON-METHYL )")
+c2006.3 <- cauliflower %>% filter(Year == 2006) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (DISULFOTON )")
+c2006.4 <- cauliflower %>% filter(Year == 2006) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (METHAMIDOPHOS )")
+rbind(c2006.1,c2006.2,c2006.3,c2006.4)
+```
+
+## Data for Cauliflower with 4 highly toxic chemical (2010)
+```{r,echo=FALSE}
+c2010.1 <- cauliflower %>% filter(Year == 2010) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (METHOMYL )")
+c2010.2 <- cauliflower %>% filter(Year == 2010) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (OXYDEMETON-METHYL )")
+c2010.3 <- cauliflower %>% filter(Year == 2010) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (DISULFOTON )")
+c2010.4 <- cauliflower %>% filter(Year == 2010) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (METHAMIDOPHOS )")
+rbind(c2010.1,c2010.2,c2010.3,c2010.4)
+```
+
+## Data for Cauliflower with 4 highly toxic chemical (2014)
+```{r,echo=FALSE}
+c2014.1 <- cauliflower %>% filter(Year == 2014) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (METHOMYL )")
+c2014.2 <- cauliflower %>% filter(Year == 2014) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (OXYDEMETON-METHYL )")
+c2014.3 <- cauliflower %>% filter(Year == 2014) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (DISULFOTON )")
+c2014.4 <- cauliflower %>% filter(Year == 2014) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (METHAMIDOPHOS )")
+rbind(c2014.1,c2014.2,c2014.3,c2014.4)
+```
+## Data for Cauliflower with 4 highly toxic chemical (2016)
+```{r,echo=FALSE}
+c2016.1 <- cauliflower %>% filter(Year == 2016) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (METHOMYL )")
+c2016.2 <- cauliflower %>% filter(Year == 2016) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (OXYDEMETON-METHYL )")
+c2016.3 <- cauliflower %>% filter(Year == 2016) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (DISULFOTON )")
+c2016.4 <- cauliflower %>% filter(Year == 2016) %>% select(Chemical, Vegetable,Year,LD50,A) %>% 
+  filter(Chemical==" INSECTICIDE: (METHAMIDOPHOS )")
+rbind(c2016.1,c2016.2,c2016.3,c2016.4)
+```
+
+## Observation
+
+- Only one out of the four extreme toxic chemicals (Methomyl) was applied to cauliflower
+- The amount of application decreased from 2010 to 2016 (from 1500lb to 300lb)
+- No extreme toxic chemicals were found in the data from 2012 
+
+
+## Final Conclusion 
+- The amount of insecticide applied on vegetables such as broccoli and cauliflower is generally pretty large. Several chemicals have small LD50 toxic levels (i.e. higher on the scale of toxicity for human consumption)
+- On the plus side, there is a trend in reducing toxic chemical applications on both broccoli and cauliflower. So people are slowly becoming aware of the danger of toxic insecticide
+- Since we only have limited information available, we are not able to do more analysis on the issue of pesticide application. But in general, we should be careful in purchasing vegetables that have a record of pestcide application (e.g. broccoli, cauliflower)
+- We also made interactive graphics in our Shiny App. We should watch out for those pesticides with small LD50 level and large application amount. 
+
