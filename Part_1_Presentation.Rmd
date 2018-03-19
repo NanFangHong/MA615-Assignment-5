@@ -1,0 +1,245 @@
+---
+title: "What Does a Buoy in Southern Bering Sea Tell Us?"
+subtitle: "Data acquisition, data tidying and ready for Shiny App"
+author: "Jiajian Guo, Nanfang Hong, Maria Ren"
+date: "March 15, 2018"
+output: ioslides_presentation
+---
+
+```{r echo = FALSE}
+# Warning this code is highly scalable and takes roughly longer time to run. Please be patient! 
+```
+
+
+## Background
+
+Is global warming serious? 
+
+We acquired 30 years time series data of a buoy (No.46035 at 57.026 N 177.738 W) in southern Bering Sea from NOAA (National Oceanic and Atmospheric Administration) National Data Buoy Center. 
+
+And we look at them.
+
+Then we ask:
+
+
+- Are air temperature and sea temperature related?
+- Has tmeperature changed over the past 30 years?
+
+## Issues in real data
+
+- Two digits 'year' until 1998; four digits 'year' starts from 1999
+- Time precision enhanced to 'minutes' from 2005/01/01 
+- From 2008/01/31 23:00, all data collected at XX:50, like 00:50 instead of 01:00
+- Data of 2013 are all missing
+- From 2007, the second row is unit: one more line to skip when reading
+- ATMP (Air Temperature) and WTMP (Sea Temperature) has missing values displayed as '99' and '999'
+
+## Solution to issues
+
+- 1988-1998, turn year to 4 digits 
+- 1988-2004, suppose minute = 00:00 before minute precision was reached
+- 2005-2006, when reading ATMP and WTMP, shift one column rightward
+- 2007-2017, read from 3rd line to skip unit line; when reading ATMP and WTMP, shift one column rightward
+- Make a 10-minutes approximate shift at 2008/01/31 23:50 -> 2008/02/01 00 and from then on all data shift by 10 minutes forward. 
+- Detect and assign all missing value with 'NA' 
+
+```{r, echo = FALSE, message = FALSE}
+
+library(tidyverse)
+
+# data attributes and units
+#YY  MM DD hh mm WDIR WSPD GST  WVHT   DPD   APD MWD   PRES  ATMP  WTMP  DEWP  VIS PTDY  TIDE
+#yr  mo dy hr mn degT m/s  m/s     m   sec   sec degT   hPa  degC  degC  degC  nmi  hPa    ft
+
+# There are two attributes we are interested in: ATMP and WTMP
+# The time is station local time
+# http://www.ndbc.noaa.gov/view_text_file.php?filename=46035h2017.txt.gz&dir=data/historical/stdmet/ is the address for 2017. let's set this string from 2017 to 1988, 30 years span.
+
+# We notice 5 facts:
+# 1. 1999 is the first time in 4 digits, from then on all 4 digits. 
+# 2. from 2005/01/01 the first time has minutes
+# 3. though has minutes, they are all on clock, like 1:00, 2:00. 
+#    From 2008/01/31 23:00 on, all data collected at 50, like 23:50, 00:50. 
+# 4. data in 2013 is missing.
+# 5. from 2007, the second line is unit.
+
+# Therefore, We decide:
+# 1. we handle the date in four ways: 1988-1998, turn year to 4 digits; 1988-2004, suppose minute = 00 before minute precision was reached; 2005-2006, shift one column right; 2007-2017, read from 3rd line and shift one column right.
+# 2. we do a 10-minutes approximate shift 2008/01/31 23:50 -> 2008/02/01 00 and from then     on all data shift by 10 minutes forward. 
+# 3. all the missing value will be 'NA'. 
+
+tb <- tibble()
+for (i in 1988:1998) {
+  address <- paste('http://www.ndbc.noaa.gov/view_text_file.php?filename=46035h', 
+                   toString(i), '.txt.gz&dir=data/historical/stdmet/', sep = '')
+  tb_sub <- read_table(address, col_names = FALSE, skip = 1,
+                       col_types = cols(X1 = col_character(),
+                                        X2 = col_character(),
+                                        X3 = col_character(),
+                                        X4 = col_character(),
+                                        X13 = col_double(),
+                                        X14 = col_double())) %>% 
+    select('X1', 'X2', 'X3', 'X4', 'X13','X14')
+  tb_sub$X1 <- paste('19', tb_sub$X1, sep = '')
+  tb <- bind_rows(tb, tb_sub)
+  
+}
+
+for (i in 1999:2004) {
+  address <- paste('http://www.ndbc.noaa.gov/view_text_file.php?filename=46035h', 
+                   toString(i), '.txt.gz&dir=data/historical/stdmet/', sep = '')
+  tb_sub <- read_table(address, col_names = FALSE, skip = 1,
+                       col_types = cols(X1 = col_character(),
+                                        X2 = col_character(),
+                                        X3 = col_character(),
+                                        X4 = col_character(),
+                                        X13 = col_double(),
+                                        X14 = col_double())) %>% 
+    select('X1', 'X2', 'X3', 'X4', 'X13','X14')
+  tb <- bind_rows(tb, tb_sub)
+}
+tb$X5 <- '00'
+  
+for (i in 2005:2006) {
+  address <- paste('http://www.ndbc.noaa.gov/view_text_file.php?filename=46035h', 
+                   toString(i), '.txt.gz&dir=data/historical/stdmet/', sep = '')
+  tb_sub <- read_table(address, col_names = FALSE, skip = 1,
+                       col_types = cols(X1 = col_character(),
+                                        X2 = col_character(),
+                                        X3 = col_character(),
+                                        X4 = col_character(),
+                                        X5 = col_character(),
+                                        X14 = col_double(),
+                                        X15 = col_double())) %>% 
+    select('X1', 'X2', 'X3', 'X4', 'X5', 'X14', 'X15') %>% 
+    rename(X13 = X14, X14 = X15)
+  tb <- bind_rows(tb, tb_sub)
+}
+
+for (i in 2007:2017) {
+  # year 2013 data is missing, so 
+  if (i == 2013) next 
+  address <- paste('http://www.ndbc.noaa.gov/view_text_file.php?filename=46035h', 
+                   toString(i), '.txt.gz&dir=data/historical/stdmet/', sep = '')
+  tb_sub <- read_table(address, col_names = FALSE, skip = 2,
+                       col_types = cols(X1 = col_character(),
+                                        X2 = col_character(),
+                                        X3 = col_character(),
+                                        X4 = col_character(),
+                                        X5 = col_character(),
+                                        X14 = col_double(),
+                                        X15 = col_double())) %>% 
+    select('X1', 'X2', 'X3', 'X4', 'X5', 'X14', 'X15') %>% 
+    rename(X13 = X14, X14 = X15)
+  tb <- bind_rows(tb, tb_sub)
+}
+rm(tb_sub)
+
+#parse the time to lubridate and round it to hours, and then set local timezone.
+datetime <- bind_cols(transmute(tb, date = paste(tb$X1, tb$X2, tb$X3, sep = '-')), 
+             transmute(tb, time = paste(tb$X4, tb$X5, sep = ':'))) 
+datetime <- transmute(datetime, lubridatetime = paste(datetime$date, datetime$time))  
+lubridate <- lubridate::ymd_hm(datetime$lubridatetime) %>% 
+  lubridate::round_date(unit = 'hour') %>% 
+  lubridate::force_tz(tzone = 'HST')
+
+tb <- bind_cols(lubridate = lubridate, ATMP = tb$X13, WTMP = tb$X14)
+rm(lubridate, datetime)
+# We notice that (ATMP) has missing values (displayed as '999'), 
+# (WTMP) has missing values (displayed as '999').
+tb$ATMP[tb$ATMP == 99] <- NA
+tb$WTMP[tb$WTMP == 99] <- NA
+tb$ATMP[tb$ATMP == 999] <- NA
+tb$WTMP[tb$WTMP == 999] <- NA
+
+```
+
+
+## Special issue we identified
+
+- WTMP 'jumped' back and forth from 9.9 to 0.0 during certain years. (e.g. 8.9 -> 9.9 -> 0.0 -> 0.1 -> 0.0 -> 9.9)
+- 2004-2006
+
+```{r, echo = FALSE}
+tb1 <- tb %>% filter(lubridate >= as.Date('2004-7-23') & lubridate <= as.Date('2006-10-01'))
+plot(tb1$lubridate, tb1$WTMP)
+```
+
+## Special issue we identified
+
+- WTMP 'jumped' back and forth from 9.9 to 0.0 during certain years. (e.g. 8.9 -> 9.9 -> 0.0 -> 0.1 -> 0.0 -> 9.9)
+- 2015-2017
+
+```{r, echo = FALSE}
+tb1 <- tb %>% filter(lubridate >= as.Date('2015-1-1') & lubridate <= as.Date('2017-10-01'))
+plot(tb1$lubridate, tb1$WTMP)
+```
+
+
+## Solution to issue
+
+We identify the outliner and fix it
+
+```{r, echo = FALSE, message = FALSE}
+# identified outliner 
+# from scatter plot(ATMP, WTMP) we can see a bunch of outliner,
+# they can be separated by line: ATMP = WTMP + 5
+tb <- tb %>% mutate(Outliner = (ATMP - (WTMP + 5) > 0) ) 
+
+
+# From two graph, we can see that the outliner WTMP data should be shift 10 degree (1993 is not outliner)
+# which(tb$Outliner == T & tb$lubridate <= as.Date('1992-12-31'))
+
+tb[39464, ]$Outliner <- F
+tb[39465, ]$Outliner <- F
+tb1 <- tb %>% filter(Outliner == 1)
+plot(tb1$lubridate, tb1$Outliner)
+
+tb[which(tb$Outliner == T), ]$WTMP <- tb[which(tb$Outliner == T), ]$WTMP + 10
+
+tb <- tb %>% select(-Outliner)
+
+
+```
+
+## Cleaned tidy data
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+library(ggExtra)
+p <- ggplot(tb, aes(WTMP, ATMP)) + geom_point() +
+  theme_classic() + labs(x = 'Sea temperature (C)', y = 'Air temperature (C)') +
+  ggtitle('1988 - 2017 Southern Bering Sea Buoy Data')
+plot_ATMP_WTMP = ggExtra::ggMarginal(p, type = "histogram")
+plot_ATMP_WTMP
+```
+
+## Cleaned tidy data
+
+```{r, echo=FALSE}
+plot(tb$lubridate, tb$ATMP)
+```
+
+## Cleaned tidy data
+
+```{r, echo=FALSE}
+plot(tb$lubridate, tb$WTMP)
+```
+
+## Cleaned tidy data
+
+```{r, echo=FALSE}
+tb
+```
+
+## Statistical Analysis
+
+To test whether air temperatuer and sea temperature are related, we use simple linear regression.
+
+To test whether air temperatuer or sea temperature is trending upward, we use seasonal linear regression, a parametric trend testing method with period n assigned (e.g. 12 for monthly data, 52 for weekly data). The advantage of this method is that it can minimize the loss of values. If there is no trend, the linear term would be zero, though there exist missing values. 
+
+\[ {Y_t}= {\beta_0}+{\beta_1}\sin(\frac{2\pi}{n}\cdot t)+{\beta_2}\cos(\frac{2\pi}{n}\cdot t) + {\beta_3}t + {\epsilon_t} \]
+
+\[t = 1, 2, 3,...\]
+ 
+The result would be displayed in Shiny App. 
+
